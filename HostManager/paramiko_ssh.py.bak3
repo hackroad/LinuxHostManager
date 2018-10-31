@@ -35,10 +35,8 @@ class SSHConnection( object ):
         self._XShellChan = None
         self._SSH = None
         self._Sftp = None
-        self._Que = None    #消费者队列
-        self._ProQue = None    #生产队列
+        self._Que = None
         self._Pool = None
-        self._Event = None
 
     def connect(self):
         """
@@ -64,77 +62,58 @@ class SSHConnection( object ):
         # 自动添加策略，保存服务器的主机名和密钥信息
         self._SSH.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
-    def remote_producer(self, remote_dir, local_dir):
-        """远程Sftp数据生产者
-        遍历远程目录，将生成的数据put到本地消费者队列
-        """
-        self.connect()
-        if self._Sftp is None:
-            # 获取SFTP实例
-            self._Sftp = paramiko.SFTPClient.from_transport(self._Trans)
-        print('我是生产者,Run task %s PID(%s).PPID(%s)..' % (remote_dir, os.getpid(), os.getppid()))
-        start = time.time()
-        #获取目录信息，将获取到的
-        self.get_remote_dir_all_files(remote_dir, remote_dir, local_dir)
-        end = time.time()
-        print('Task %s runs %0.2f seconds.' % (remote_dir, (end - start)))
-
-    def local_consumer(self, ori_remote_dir, local_dir):
-        """本地Sftp数据消费者
-        接收远程回传的队列中数据，回传本地数据
-        """
+    def long_time_task(self, local_file, i):
         # print(file)
         # (file_path, qq)=file)
         self.connect()
         if self._Sftp is None:
             # 获取SFTP实例
             self._Sftp = paramiko.SFTPClient.from_transport(self._Trans)
-        #当队列不为空的时候进行文件下载
-        print('我是消费者,Run task PID(%s).PPID(%s)..' % (os.getpid(), os.getppid()))
-        while not self._Event.is_set():
-            try:
-                file_dir=self._Que.get(timeout=2)   #两秒超时，捕获异常去检测事件状态
-                print('队列目前的情况:',self._Que.qsize())
-                #(file_path,file_name)=os.path.split(file_dir)
-                print('消费者Run task %s (%s)...' % (file_dir, os.getpid()))
-                start = time.time()
-                local_file=local_dir+os.path.sep+file_dir[len(ori_remote_dir):len(file_dir)]
-                print('下载数据[%s][%s]' % (file_dir,local_file))
-                #self.sftp_get(ori_remote_dir, file_dir, local_file)
-                end = time.time()
-            except self._Que.Empty:
-                continue    #取检测事件
-            finally:    #最后要将task_done将信息穿个jion判断是否消费完毕
-                print('Task %s runs %0.2f seconds.' % (file_dir, (end - start)))
-            self._Que.task_done()
-        print('我已经收到了退出事件[%d]', os.getpid())
-    def get_remote_dir_all_files(self, ori_remote_dir, new_remote_dir, local_dir):
+        print('我是进程:',i)
+        while True:
+            file_dir=self._Que.get()
+            print('Run task %s (%s)..%d.' % (file_dir, os.getpid(),i))
+            start = time.time()
+            self.get_remote_dir_all_files(file_dir)
+            end = time.time()
+            print('Task %s runs %0.2f seconds.' % (file_dir, (end - start)))
+
+    def get_remote_dir_all_files(self, remote_dir):
         """
         获取远端linux主机上指定目录及其子目录下的所有文件
         """
         # 只获取文件夹
-        if new_remote_dir[-1] == '/':
-            new_remote_dir = new_remote_dir[0:-1]
-
-        #获取远程文件列表
-        print('访问文件列表:', new_remote_dir)
-        files = self._Sftp.listdir_attr(new_remote_dir)
-        for file in files:
+        '''
+        (file_path, tmp_file_name) = os.path.split(remote_dir)
+        if len(tmp_file_name) != 0: #这是一个文件直接返回文件名
+            all_files.append(tmp_file_name)
+        else:
+            file_path = file_path + '/'
+        '''
+        #判断是否为目录
+        tmp_cmd='(if [ ! -d "%s" ]; then  exit 1; fi)' % remote_dir
+        if self.shell_cmd(tmp_cmd) != 0:    #文件直接下载
+            print("Get[%s]文件传输中..." % remote_dir)
+            #self._Sftp.get(x, local_filename)
+            #local_filename = os.path.join(local_path, remote_dir)
+        else:
             # 去掉路径字符串最后的字符'/'，如果有的话
-            if new_remote_dir[-1] == '/':
-                new_remote_dir = new_remote_dir[0:-1]
-            filename = new_remote_dir + '/' + file.filename
-            if S_ISDIR(file.st_mode):
-                #在本地建立文件夹
-                local_dir_new=local_dir+os.path.sep+filename[len(ori_remote_dir)+1:len(filename)]
-                print('本地建立:', local_dir_new)
-                #os.makedirs(local_dir_new, exist_ok=True)
-                #进一步递归遍历
-                self.get_remote_dir_all_files(ori_remote_dir, filename, local_dir)
-            else:
-                print('文件[%s]加入队列!' % filename)
-                self._Que.put(filename)
-        return True
+            if remote_dir[-1] == '/':
+                remote_dir = remote_dir[0:-1]
+            print ('遍历目录[%s]' % remote_dir)
+            # 获取当前指定目录下的所有目录及文件，包含属性值
+            files = self._Sftp.listdir_attr(remote_dir)
+            for x in files:
+                # file_path目录中每一个文件或目录的完整路径
+                file_path_name = remote_dir + '/' + x.filename
+                # 如果是目录，则递归处理该目录，这里用到了stat库中的S_ISDIR方法，与linux中的宏的名字完全一致
+                self._Que.put(file_path_name)
+
+
+
+    def Bar(self, arg):
+        print('-->exec done:', arg, os.getpid())
+
     @staticmethod
     def sftp_mul_thread_get_dir(HostIp, HostPort, HostName, HostPassword,remote_path, local_path, thread_num=0):
         """
@@ -143,59 +122,28 @@ class SSHConnection( object ):
         if len(remote_path) == 0 or len(local_path) == 0:
             print("路径存在空的情况![%s][%s]" % (remote_path, local_path))
             return False
-
-        #原始远程文件夹
-        if remote_path[-1] == '/':
-            remote_path = remote_path[0:-1]
-
-        #原始远程文件夹
-        if local_path[-1] == os.path.sep:
-            local_path = local_path[0:-1]
-        qq=multiprocessing.Manager()
-        _Que=qq.Queue()
-
+        #
+        _Que = multiprocessing.Queue()
         # 获取远端linux主机上指定目录及其子目录下的所有文件
         _Que.put(remote_path)
         ps = []
         ssh = SSHConnection(HostIp, HostPort, HostName, HostPassword)
-        ssh._Que = _Que
-
-        #定义事件
-        ssh._Event=multiprocessing.Event()
-        ssh._Event.clear()
-
-        print('启动生产者')
-        pp = multiprocessing.Process(target=ssh.remote_producer, args=(remote_path,local_path))
-
-        print('启动生产者1')
-        pp.start()
-
-        print('启动消费者...')
-        for i in range(5):
+        for i in range(1):
             # 创建子进程实例
             ssh._Que=_Que
-            p = multiprocessing.Process(target=ssh.local_consumer, args=(remote_path,local_path))
+            p = multiprocessing.Process(target=ssh.long_time_task, args=(local_path,i))
             ps.append(p)
+
         # 开启进程
         for i in range(5):
             ps[i].start()
 
-        #等待生产者退出
-        pp.join()
-        print("生产者退出")
-
-        #等待队列退出
-        ssh._Que.join()
-        print("队列退出")
-
-        #通知消费者退出
-        ssh._Event.set()
-
-        # 等待消费者退出
+        # 阻塞进程
         for i in range(5):
             ps[i].join()
 
         print("主进程终止")
+
 
     def sftp_get(self, remote_path, local_path):
         """
@@ -244,7 +192,7 @@ class SSHConnection( object ):
         out=stdout.read()
         if len(out) > 0:
             out.strip()
-            os.system('echo "%s" >&1' % out.decode().encode('UTF-8'))
+            os.system('echo "%s" >&1' % out)
         err=stderr.read()
         if len(err)>0:
             err.strip()
@@ -308,11 +256,3 @@ class SSHConnection( object ):
             self._XShellChan.close()
         if self._Sftp is not None:
             self._Sftp.close()
-
-    def __getstate__(self):
-        self_dict = self.__dict__.copy()
-        del self_dict['pool']
-        return self_dict
-
-    def __setstate__(self, state):
-        self.__dict__.update(state)
