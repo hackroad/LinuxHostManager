@@ -1,51 +1,48 @@
-#coding=utf-8
-#!/usr/bin/env python
+# coding=utf-8
+# !/usr/bin/env python
 
 # -*- encoding: utf-8 -*-
 
 __author__ = 'yuanwm <ywmpsn@163.com>'
 
 import paramiko
-import os
 import select
 import sys
 import tty
 import termios
+import os
 from stat import S_ISDIR
-from multiprocessing import Pool
-import os, time
-#需要使用进程Queue
-import multiprocessing
-import pickle
+import logging
 
 
-class SSHConnection( object ):
+class SSHConnection(object):
     """定义一个类SSH客户端对象
     """
-
-    def __init__(self, hostip, port, user_name, pass_word):
+    def __init__(self, host_ip, port, user_name, pass_word):
         """
         初始化各类属性
         """
-        self._HostIp = hostip
-        self._Port = port
+        self._HostIp = host_ip
+        self._Port = int(port)
         self._UserName = user_name
         self._PassWord = pass_word
         self._Trans = None
         self._XShellChan = None
         self._SSH = None
         self._Sftp = None
-        self._Que = None    #消费者队列
-        self._ProQue = None    #生产队列
-        self._Pool = None
-        self._Event = None
+        # 日志定义
+        self._Log = logging
+        self._Log.basicConfig(level=logging.DEBUG,
+                                      format='%(asctime)s %(filename)s[line:%(lineno)d] %(levelname)s %(message)s',
+                                      datefmt='%a, %d %b %Y %H:%M:%S'
+                                        )
 
     def connect(self):
         """
         与指定主机建立Socket连接
         """
         # 建立socket
-        self._Trans = paramiko.Transport((self._HostIp, int(self._Port)))
+        self._Trans = paramiko.Transport(self._HostIp, self._Port)
 
         # 启动客户端
         self._Trans.start_client()
@@ -56,202 +53,132 @@ class SSHConnection( object ):
         self._Trans.auth_publickey(username = self._UserName, key=prikey)
         '''
         # 使用用户名和密码登录
-        self._Trans.auth_password(username = self._UserName, password = self._PassWord)
+        self._Trans.auth_password(username=self._UserName, password=self._PassWord)
 
         # 封装transport
         self._SSH = paramiko.SSHClient()
         self._SSH._transport = self._Trans
+
         # 自动添加策略，保存服务器的主机名和密钥信息
         self._SSH.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
-    def remote_producer(self, remote_dir, local_dir):
-        """远程Sftp数据生产者
-        遍历远程目录，将生成的数据put到本地消费者队列
-        """
-        self.connect()
-        if self._Sftp is None:
-            # 获取SFTP实例
-            self._Sftp = paramiko.SFTPClient.from_transport(self._Trans)
-        print('我是生产者,Run task %s PID(%s).PPID(%s)..' % (remote_dir, os.getpid(), os.getppid()))
-        start = time.time()
-        #获取目录信息，将获取到的
-        self.get_remote_dir_all_files(remote_dir, remote_dir, local_dir)
-        end = time.time()
-        print('Task %s runs %0.2f seconds.' % (remote_dir, (end - start)))
-
-    def local_consumer(self, ori_remote_dir, local_dir):
-        """本地Sftp数据消费者
-        接收远程回传的队列中数据，回传本地数据
-        """
-        # print(file)
-        # (file_path, qq)=file)
-        self.connect()
-        if self._Sftp is None:
-            # 获取SFTP实例
-            self._Sftp = paramiko.SFTPClient.from_transport(self._Trans)
-        #当队列不为空的时候进行文件下载
-        print('我是消费者,Run task PID(%s).PPID(%s)..' % (os.getpid(), os.getppid()))
-        while not self._Event.is_set():
-            try:
-                file_dir=self._Que.get(timeout=2)   #两秒超时，捕获异常去检测事件状态
-                print('队列目前的情况:',self._Que.qsize())
-                #(file_path,file_name)=os.path.split(file_dir)
-                print('消费者Run task %s (%s)...' % (file_dir, os.getpid()))
-                start = time.time()
-                local_file=local_dir+os.path.sep+file_dir[len(ori_remote_dir):len(file_dir)]
-                print('下载数据[%s][%s]' % (file_dir,local_file))
-                #self.sftp_get(ori_remote_dir, file_dir, local_file)
-                end = time.time()
-            except self._Que.Empty:
-                continue    #取检测事件
-            finally:    #最后要将task_done将信息穿个jion判断是否消费完毕
-                print('Task %s runs %0.2f seconds.' % (file_dir, (end - start)))
-            self._Que.task_done()
-        print('我已经收到了退出事件[%d]', os.getpid())
-    def get_remote_dir_all_files(self, ori_remote_dir, new_remote_dir, local_dir):
-        """
-        获取远端linux主机上指定目录及其子目录下的所有文件
-        """
-        # 只获取文件夹
-        if new_remote_dir[-1] == '/':
-            new_remote_dir = new_remote_dir[0:-1]
-
-        #获取远程文件列表
-        print('访问文件列表:', new_remote_dir)
-        files = self._Sftp.listdir_attr(new_remote_dir)
-        for file in files:
-            # 去掉路径字符串最后的字符'/'，如果有的话
-            if new_remote_dir[-1] == '/':
-                new_remote_dir = new_remote_dir[0:-1]
-            filename = new_remote_dir + '/' + file.filename
-            if S_ISDIR(file.st_mode):
-                #在本地建立文件夹
-                local_dir_new=local_dir+os.path.sep+filename[len(ori_remote_dir)+1:len(filename)]
-                print('本地建立:', local_dir_new)
-                #os.makedirs(local_dir_new, exist_ok=True)
-                #进一步递归遍历
-                self.get_remote_dir_all_files(ori_remote_dir, filename, local_dir)
-            else:
-                print('文件[%s]加入队列!' % filename)
-                self._Que.put(filename)
         return True
-    @staticmethod
-    def sftp_mul_thread_get_dir(HostIp, HostPort, HostName, HostPassword,remote_path, local_path, thread_num=0):
-        """
-        多线程实现SFTP功能下载文件夹功能，可以使用相对路径，但必须是文件
-        """
-        if len(remote_path) == 0 or len(local_path) == 0:
-            print("路径存在空的情况![%s][%s]" % (remote_path, local_path))
-            return False
-
-        #原始远程文件夹
-        if remote_path[-1] == '/':
-            remote_path = remote_path[0:-1]
-
-        #原始远程文件夹
-        if local_path[-1] == os.path.sep:
-            local_path = local_path[0:-1]
-        qq=multiprocessing.Manager()
-        _Que=qq.Queue()
-
-        # 获取远端linux主机上指定目录及其子目录下的所有文件
-        _Que.put(remote_path)
-        ps = []
-        ssh = SSHConnection(HostIp, HostPort, HostName, HostPassword)
-        ssh._Que = _Que
-
-        #定义事件
-        ssh._Event=multiprocessing.Event()
-        ssh._Event.clear()
-
-        print('启动生产者')
-        pp = multiprocessing.Process(target=ssh.remote_producer, args=(remote_path,local_path))
-
-        print('启动生产者1')
-        pp.start()
-
-        print('启动消费者...')
-        for i in range(5):
-            # 创建子进程实例
-            ssh._Que=_Que
-            p = multiprocessing.Process(target=ssh.local_consumer, args=(remote_path,local_path))
-            ps.append(p)
-        # 开启进程
-        for i in range(5):
-            ps[i].start()
-
-        #等待生产者退出
-        pp.join()
-        print("生产者退出")
-
-        #等待队列退出
-        ssh._Que.join()
-        print("队列退出")
-
-        #通知消费者退出
-        ssh._Event.set()
-
-        # 等待消费者退出
-        for i in range(5):
-            ps[i].join()
-
-        print("主进程终止")
 
     def sftp_get(self, remote_path, local_path):
         """
-        实现SFTP功能下载文件功能，可以使用相对路径，但必须是文件
+        实现SFTP功能下载文件功能
+        :param remote_path: 远端目录、文件路径，必须是绝对的
+        :param local_path:必须是文件
+        :return:成功: True  失败: False
         """
+        # 传入为空检测
         if len(remote_path) == 0 or len(local_path) == 0:
-            print ("路径存在空的情况![%s][%s]" % (remote_path, local_path))
+            self._Log.error("路径存在空的情况![%s][%s]" % (remote_path, local_path))
             return False
+
+        # 本地路径路径绝对化
+        local_path = os.path.abspath(local_path)
+
+        # 定义连接
         if self._Sftp is None:
             # 获取SFTP实例
             self._Sftp = paramiko.SFTPClient.from_transport(self._Trans)
+        '''
+        由于不支持本地路径，需要指定文件；因此，如果传入的是本地路径，则默认传到该路径下，文件名为原文件名
+        '''
+
+        # 检测远端文件合法性，并分离路径与文件名
+        remote_file_stat = self._Sftp.stat(remote_path)
+        if S_ISDIR(remote_file_stat.st_mode):
+            self._Log.error('远端[%s]是目录' % remote_path)
+            return False
+        (remote_file_path, remote_file_name) = os.path.split(remote_path)
+
+        # 本地文件名组合
         try:
-            self._Sftp.get(remote_path, local_path)
+            local_path_stat = os.stat(local_path)
+            if S_ISDIR(local_path_stat.st_mode):
+                local_file_path = local_path+os.path.sep+remote_file_name
+            else:
+                local_file_path = local_path
+        except IOError:      # 如果没有这个目录/文件夹，默认以此为文件
+            local_file_path = local_path
+
+        # 下载文件
+        self._Log.info('下载:get[%s]from[%s]' % (local_file_path, remote_path))
+        try:
+            self._Sftp.get(remote_path, local_file_path)
         except Exception as err_msg:
-            print('获取文件失败![%s]' % err_msg)
+            self._Log.error('获取文件失败![%s]' % err_msg)
+            return False
+        return True
 
     def sftp_put(self, local_path, remote_path):
         """
-        实现SFTP上传文件功能，可以使用相对路径，但必须是文件
+        实现SFTP功能上传文件功能
+        :param local_path: 本地必须是文件
+        :param remote_path: 远端目录、文件路径，必须是绝对的
+        :return:成功: True  失败: False
         """
         if len(remote_path) == 0 or len(local_path) == 0:
-            print ("路径存在空的情况![%s][%s]" % (remote_path, local_path))
+            self._Log.error("路径存在空的情况![%s][%s]" % (remote_path, local_path))
             return False
+
         if self._Sftp is None:
+            self._Log.info('建立SFTP连接')
             # 获取SFTP实例
             self._Sftp = paramiko.SFTPClient.from_transport(self._Trans)
+        '''
+        由于不支持远程路径，需要指定文件；因此，如果传入的是远程路径，则默认传到该路径下，文件名为原文件名
+        '''
+        # 去掉分隔符
+        if remote_path[-1] == os.path.sep:
+            remote_path = remote_path[0:-1]
+        # 路径作特殊处理
         try:
-            self._Sftp.put(local_path, remote_path)
+            remote_path_stat = self._Sftp.stat(remote_path)
+            if S_ISDIR(remote_path_stat.st_mode):
+                (local_file_path, local_file_name) = os.path.split(local_path)
+                remote_file_path = remote_path+os.path.sep+local_file_name
+            else:
+                remote_file_path = remote_path
+        except IOError:      # 如果没有这个目录/文件夹，默认以此为文件
+            remote_file_path = remote_path
+        try:
+            self._Sftp.put(local_path, remote_file_path)
         except Exception as err_msg:
-            print('上传文件失败![%s]' % err_msg)
-
+            self._Log.error('上传文件失败![%s]' % err_msg)
+            return False
+        return True
 
     def shell_cmd(self, cmd):
         """
         在主机上执行单个shell命令
         """
         if len(cmd) == 0:
-            os.system('echo "命令为空，请重新输入!" >&2 ')
+            self._Log.error('命令为空，请重新输入!')
+            return False
 
         stdin, stdout, stderr = self._SSH.exec_command(cmd)
-        chan=stdout.channel
-        # 返回状态
-        status=chan.recv_exit_status()
+        chan = stdout.channel
 
-        #分别返回标准错误，标准输出
-        out=stdout.read()
+        # 返回状态获取
+        status = chan.recv_exit_status()
+
+        # 分别返回标准错误，标准输出
+        out = stdout.read()
         if len(out) > 0:
             out.strip()
-            os.system('echo "%s" >&1' % out.decode().encode('UTF-8'))
-        err=stderr.read()
-        if len(err)>0:
+            sys.stdout.write(out.decode())
+            sys.stdout.flush()
+        err = stderr.read()
+        if len(err) > 0:
             err.strip()
-            os.system('echo "%s" >&2' % err)
+            sys.stderr.write(err.decode())
+            sys.stderr.flush()
+
         # 返回shell命令的状态
         return status
-
 
     def x_shell(self):
         """
@@ -285,7 +212,8 @@ class SSHConnection( object ):
                     result = self._XShellChan.recv(65535)
                     # 断开连接后退出
                     if len(result) == 0:
-                        print("\n**连接已断开**\n")
+                        sys.stdout.write("\t**连接已断开，欢迎再回来**\n")
+                        sys.stdout.flush()
                         break
                     # 输出到屏幕
                     sys.stdout.write(result.decode())
@@ -293,9 +221,7 @@ class SSHConnection( object ):
         finally:
             # 执行完后将现在的终端属性恢复为原操作终端属性
             termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_tty_arg)
-            # 关闭通道
-            self._XShellChan.close()
-
+        return True
 
     def disconnect(self):
         """
@@ -308,11 +234,7 @@ class SSHConnection( object ):
             self._XShellChan.close()
         if self._Sftp is not None:
             self._Sftp.close()
+        if self._SSH is not None:
+            self._SSH.close()
+        return True
 
-    def __getstate__(self):
-        self_dict = self.__dict__.copy()
-        del self_dict['pool']
-        return self_dict
-
-    def __setstate__(self, state):
-        self.__dict__.update(state)
