@@ -7,8 +7,17 @@ from stat import S_ISDIR
 import os
 import time
 import multiprocessing
-import queue
-import paramiko_ssh
+import sys
+if sys.version > '3':
+    import queue
+    my_queue=queue
+else:
+    import Queue
+    my_queue=Queue
+    if sys.getdefaultencoding() != 'utf-8':
+        reload(sys)
+        sys.setdefaultencoding('utf-8')
+import paramiko_sh
 import logging
 import paramiko
 
@@ -24,7 +33,7 @@ class MultiSftp(object):
         self._PassWord = pass_word
         # 日志定义
         self._Log = logging
-        self._Log.basicConfig(level=logging.DEBUG,
+        self._Log.basicConfig(level=logging.ERROR,
                               format='%(asctime)s %(filename)s[line:%(lineno)d] %(levelname)s %(message)s',
                               datefmt='%a, %d %b %Y %H:%M:%S'
                               )
@@ -41,7 +50,7 @@ class MultiSftp(object):
         :param task_event:
         :return:
         """
-        ssh = paramiko_ssh.SSHConnection(self._HostIp, self._Port, self._UserName, self._PassWord)
+        ssh = paramiko_sh.SSHConnection(self._HostIp, self._Port, self._UserName, self._PassWord)
         ssh.connect()
         if ssh._Sftp is None:
             # 获取SFTP实例
@@ -63,7 +72,7 @@ class MultiSftp(object):
                 end = time.time()
                 self._Log.info('Task %s runs %0.2f seconds.' % (task_object, (end - start)))
                 task_que.task_done()
-            except queue.Empty: #这里检测是否收到了退出事件
+            except my_queue.Empty: #这里检测是否收到了退出事件
                 continue
             except Exception as err_msg:    # 报错后通知其他进程全部退出，暂时不考虑其他进程接管，防止死循环，后期再处理
                 self._Log.error('[%ld]执行任务出错[%s],退出！' % (os.getpid(), err_msg))
@@ -178,6 +187,8 @@ class MultiSftp(object):
                 '''
                 if len(process_list) < process_num:  # 小于最大定义数就开启进程
                     first_task_object = task_que.get(timeout=1)
+                    if len(process_list)>10:
+                        time.sleep(1)
                     process = multiprocessing.Process(target=self.__sftp_mul_process_deal_grandson__,
                                                       args=(src_path, dec_path, first_task_object, opera_method,
                                                             task_que, task_event))
@@ -185,7 +196,7 @@ class MultiSftp(object):
                     process_list.append(process)
                 else:   # 达到最大进程数限制就不在建立新进程
                     break
-            except queue.Empty:     # 这里检测是否收到了退出事件
+            except Queue.Empty:     # 这里检测是否收到了退出事件
                     continue
             # 最后要将task_done将信息传给JION判断是否消费完毕
         self._Log.info('儿子我已经收到了退出事件: %s' % os.getpid())

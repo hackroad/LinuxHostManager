@@ -3,28 +3,90 @@
 
 __author__ = 'yuanwm <ywmpsn@163.com>'
 
-from paramiko_ssh import SSHConnection
-from multisftp import MultiSftp
+import warnings
+
+warnings.filterwarnings("ignore",category=DeprecationWarning)
+
+from paramiko_sh import SSHConnection
+from multistp import MultiSftp
 import sys
+
 
 
 '''
 在这里定义IP与用户名以及密码，暂时使用字典定义（防止无第三方的模块解析配置文件）
 '''
 HostMsg = {
-    "account@103.46.128.49": {
-        "HostPassWord": "ie5Pxi$t",
-        "HostPort": "19776"
-    },
-    "account@192.168.1.7": {
-        "HostPassWord": "ie5Pxi$t",
-        "HostPort": "22"
-    },
-    "account@10.113.178.111": {
+    "account@10.113.78.111": {
         "Note": "预演环境1号机",
         "HostPassWord": "iC4me#ck",
         "HostPort": "22"
-    }
+    },
+    "account@10.113.78.112": {
+        "Note": "预演环境2号机",
+        "HostPassWord": "iC4me#ck",
+        "HostPort": "22"
+    },
+    "e3base@10.113.77.25":{
+        "Note":"府青详单统计1号机",
+        "HostPassWord": "CHrdw_3jf",
+        "HostPort": "22"    	
+    },
+    "e3base@10.113.77.26":{
+        "Note":"府青详单统计2号机",
+        "HostPassWord": "CHrdw_3jf",
+        "HostPort": "22"    	
+    },
+    "e3base@10.113.77.27":{
+        "Note":"府青详单统计3号机",
+        "HostPassWord": "CHrdw_3jf",
+        "HostPort": "22"    	
+    },
+    "account@10.113.77.25":{
+        "Note":"府青详单统计1号机",
+        "HostPassWord": "VdG_6pi6",
+        "HostPort": "22"    	
+    },
+    "account@10.113.77.26":{
+        "Note":"府青详单统计2号机",
+        "HostPassWord": "4_vWQf*t",
+        "HostPort": "22"    	
+    },
+    "account@10.113.77.27":{
+        "Note":"府青详单统计3号机",
+        "HostPassWord": "37_4^E7j",
+        "HostPort": "22"    	
+    },
+    "e3base@10.113.78.25":{
+        "Note":"西区详单统计1号机",
+        "HostPassWord": "CHrdw_3jf",
+        "HostPort": "22"    	
+    },
+    "e3base@10.113.78.26":{
+        "Note":"西区详单统计2号机",
+        "HostPassWord": "CHrdw_3jf",
+        "HostPort": "22"    	
+    },
+    "e3base@10.113.78.27":{
+        "Note":"西区详单统计3号机",
+        "HostPassWord": "CHrdw_3jf",
+        "HostPort": "22"    	
+    },
+    "account@10.113.112.166":{
+        "Note":"府青应用1号机",
+        "HostPassWord": "ie5Pxi$t",
+        "HostPort": "22"    	
+    },
+    "account@10.113.113.166":{
+        "Note":"西区应用1号机",
+        "HostPassWord": "ie5Pxi$t",
+        "HostPort": "22"    	
+    },
+    "daily1@10.109.2.230":{
+        "Note":"西区应用1号机",
+        "HostPassWord": "_C5kp%3G",
+        "HostPort": "22"    	
+    },
 }
 
 
@@ -90,8 +152,9 @@ python %s -getdir account@192.168.1.1:远程文件/目录 本地文件/目录(�
             command = sys.argv[3]
             ssh = SSHConnection(HostIp, HostPort, HostName, HostPassword)
             ssh.connect()
-            ssh.shell_cmd(command)
+            ret=ssh.shell_cmd(command)
             ssh.disconnect()
+            exit(ret)
         elif OperaType == '-put':   # 上传文件
             if len(sys.argv) < 4:
                 sys.stderr.write('''参数错误!,例如：
@@ -111,7 +174,7 @@ python %s -getdir account@192.168.1.1:远程文件/目录 本地文件/目录(�
             ssh.sftp_put(local_path, remote_path)
             ssh.disconnect()
         elif OperaType == '-get':   # 下载文件
-            if len(sys.argv) < 5:
+            if len(sys.argv) < 4:
                 sys.stderr.write('''参数错误!,例如：
                 python %s -get account@192.168.1.1:远程文件 本地文件/目录(从远程主机下载文件)
                 ''' % sys.argv[0])
@@ -147,7 +210,7 @@ python %s -getdir account@192.168.1.1:远程文件/目录 本地文件/目录(�
             if len(sys.argv) > 4:
                 max_process_num = int(sys.argv[4])
             else:
-                max_process_num = 10
+                max_process_num = 5
             multi_sftp = MultiSftp(HostIp, HostPort, HostName, HostPassword)
             multi_sftp.sftp_get_dir(local_path, remote_path, max_process_num)
         elif OperaType == '-putdir':    # 上传目录
@@ -169,7 +232,7 @@ python %s -getdir account@192.168.1.1:远程文件/目录 本地文件/目录(�
             if len(sys.argv) > 4:
                 max_process_num = int(sys.argv[4])
             else:
-                max_process_num = 10
+                max_process_num = 5
             multi_sftp = MultiSftp(HostIp, HostPort, HostName, HostPassword)
             multi_sftp.sftp_put_dir(local_path, remote_path, max_process_num)
         else:

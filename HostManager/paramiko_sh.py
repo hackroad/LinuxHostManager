@@ -32,7 +32,7 @@ class SSHConnection(object):
         self._Sftp = None
         # 日志定义
         self._Log = logging
-        self._Log.basicConfig(level=logging.DEBUG,
+        self._Log.basicConfig(level=logging.ERROR,
                                       format='%(asctime)s %(filename)s[line:%(lineno)d] %(levelname)s %(message)s',
                                       datefmt='%a, %d %b %Y %H:%M:%S'
                                         )
@@ -43,7 +43,6 @@ class SSHConnection(object):
         """
         # 建立socket
         self._Trans = paramiko.Transport(self._HostIp, self._Port)
-
         # 启动客户端
         self._Trans.start_client()
         # 如果使用rsa密钥登录的话--这里一般不用直接注释了
@@ -196,11 +195,13 @@ class SSHConnection(object):
         try:
             # 将现在的操作终端属性设置为服务器上的原生终端属性,可以支持tab了
             tty.setraw(sys.stdin)
+            tty.setcbreak(sys.stdin)
             self._XShellChan.settimeout(0)
             while True:
                 read_list, write_list, err_list = select.select([self._XShellChan, sys.stdin, ], [], [])
                 # 如果是用户输入命令了,sys.stdin发生变化
                 if sys.stdin in read_list:
+                		#循环读取发送
                     # 获取输入的内容，输入一个字符发送1个字符
                     input_cmd = sys.stdin.read(1)
                     # 将命令发送给服务器
@@ -216,7 +217,8 @@ class SSHConnection(object):
                         sys.stdout.flush()
                         break
                     # 输出到屏幕
-                    sys.stdout.write(result.decode())
+                    #sys.stdout.write(result.decode()) #modify by yandong :python2就是打印的bytes,不需要转换
+                    sys.stdout.write(result)
                     sys.stdout.flush()
         finally:
             # 执行完后将现在的终端属性恢复为原操作终端属性
