@@ -1,0 +1,7 @@
+{
+"account@192.168.1.1": {
+"Note": "测试1",
+"HostPassWord": "*******",
+"HostPort": "22"
+}
+}
